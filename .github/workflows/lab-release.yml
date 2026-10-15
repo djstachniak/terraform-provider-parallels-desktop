@@ -1,0 +1,45 @@
+# The DJS lab's build of this provider (djstachniak/DJS-Lab-Control-Plane, docs/refactor-phase4.md point 1): Parallels' release plus
+# fixes not yet in one of theirs. Pushing a tag v<upstream version>-lab.<n> on this fork runs the unit tests, builds Linux binaries and
+# publishes them as a pre-release with SHA256SUMS. The lab's Ansible (roles/terraform, terraform_local_providers) installs one, pinned by
+# URL and SHA-256. A release made here with GITHUB_TOKEN does not set off the other workflows (release.yml is Parallels' own).
+name: Lab release
+
+on:
+  push:
+    tags:
+      - "v*-lab.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Unit tests
+        run: go test --tags=unit ./...
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir dist
+          for target in linux/amd64 linux/arm64; do
+            os="${target%/*}" arch="${target#*/}"
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${version}" \
+              -o "dist/terraform-provider-parallels-desktop_v${version}_${os}_${arch}" .
+          done
+          (cd dist && sha256sum terraform-provider-parallels-desktop_* > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --prerelease --verify-tag --title "$GITHUB_REF_NAME" \
+            --notes "The DJS lab's build: Parallels' $(echo "$GITHUB_REF_NAME" | sed 's/-lab\..*//') plus the commits on this tag's branch not yet in a Parallels release. Built by .github/workflows/lab-release.yml from $GITHUB_SHA."
