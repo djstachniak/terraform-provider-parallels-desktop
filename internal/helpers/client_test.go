@@ -54,3 +54,32 @@ func TestHTTPStatusRedactsResponseAndHonorsCancellation(t *testing.T) {
 		t.Fatalf("lost cancellation: %v", err)
 	}
 }
+
+// A call that takes longer than the default client timeout succeeds when the request's context allows it (a resource's timeouts),
+// and is still cut off when the context has no deadline.
+func TestRequestDeadlineGovernsTheClientTimeout(t *testing.T) {
+	previous := defaultClientTimeout
+	defaultClientTimeout = 100 * time.Millisecond
+	defer func() { defaultClientTimeout = previous }()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond) // like an orchestrator creating a VM from a catalog: it answers when the VM exists
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"vm-1"}`))
+	}))
+	defer server.Close()
+
+	var created map[string]string
+	if _, err := NewHttpCaller(context.Background(), false).PostDataToClient(context.Background(), server.URL, nil, map[string]string{}, nil, &created); err == nil {
+		t.Fatal("a request without a deadline outlived the default client timeout")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := NewHttpCaller(ctx, false).PostDataToClient(ctx, server.URL, nil, map[string]string{}, nil, &created); err != nil {
+		t.Fatalf("a request with a 5 s deadline was cut off by the client timeout: %v", err)
+	}
+	if created["id"] != "vm-1" {
+		t.Fatalf("got %v", created)
+	}
+}

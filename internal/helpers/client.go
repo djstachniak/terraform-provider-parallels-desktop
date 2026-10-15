@@ -70,6 +70,20 @@ func (c *HttpCaller) DeleteDataFromClient(ctx context.Context, url string, heade
 	return c.RequestDataToClient(ctx, HttpCallerVerbDelete, url, headers, nil, auth, destination)
 }
 
+// defaultClientTimeout bounds a request whose context has no deadline of its own.
+var defaultClientTimeout = 60 * time.Second
+
+// clientTimeout returns the http.Client timeout for a request. When the context carries a deadline (the resources set one from their
+// timeouts, 60 minutes for a create by default), that deadline governs: a fixed client timeout would cut off calls that legitimately take
+// longer, such as creating a VM from a catalog through an orchestrator, which only answers once the host has pulled and registered the
+// VM. Without a deadline, the default still keeps a request from hanging forever.
+func clientTimeout(ctx context.Context) time.Duration {
+	if _, ok := ctx.Deadline(); ok {
+		return 0
+	}
+	return defaultClientTimeout
+}
+
 func (c *HttpCaller) RequestDataToClient(ctx context.Context, verb HttpCallerVerb, url string, headers *map[string]string, data interface{}, auth *HttpCallerAuth, destination interface{}) (*HttpCallerResponse, error) {
 	tflog.Info(ctx, fmt.Sprintf("%v data from %s", verb, url))
 	var err error
@@ -92,7 +106,7 @@ func (c *HttpCaller) RequestDataToClient(ctx context.Context, verb HttpCallerVer
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: c.disableTlsVerification}
 	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, Timeout: 60 * time.Second,
+	client := &http.Client{Transport: transport, Timeout: clientTimeout(ctx),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse },
 	}
 
